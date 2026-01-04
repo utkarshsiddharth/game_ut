@@ -1,0 +1,126 @@
+
+name: Villa Agency CI-CD Graph
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+
+    - name: Debug remote PATH
+      uses: appleboy/ssh-action@v1
+      with:
+        host: ${{ secrets.SERVER_IP }}
+        username: ${{ secrets.SERVER_SSH_USER }}
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        script: |
+          echo "PATH: $PATH"
+          which docker
+          docker --version
+          docker compose version || echo "Compose not in PATH"
+
+    - name: Test SSH connection
+      uses: appleboy/ssh-action@v1
+      with:
+        host: ${{ secrets.SERVER_IP }}
+        username: ${{ secrets.SERVER_SSH_USER }}
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        port: 22
+        script: |
+          echo "SSH connection successful!"
+
+
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: Test remote docker compose commands
+      uses: appleboy/ssh-action@v1
+      with:
+        host: ${{ secrets.SERVER_IP }}
+        username: ${{ secrets.SERVER_SSH_USER }}
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        script: |
+          cd /home/${{ secrets.SERVER_SSH_USER }}
+          echo "Current dir: $(pwd)"
+          # Try both forms
+          echo "Running: docker compose up -d"
+          docker compose up -d || echo "docker compose up -d failed"
+          echo "Running: docker‑compose up -d"
+          docker‑compose up -d || echo "docker‑compose up -d failed"
+
+    - name: Debug remote Docker/Compose environment
+      uses: appleboy/ssh-action@v1
+      with:
+        host: ${{ secrets.SERVER_IP }}
+        username: ${{ secrets.SERVER_SSH_USER }}
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        script: |
+          echo "SSH PATH: $PATH"
+          echo "--- Docker ---"
+          which docker
+          docker --version
+
+          echo "--- Try docker compose (CLI plugin) ---"
+          docker compose version || echo "docker compose not available"
+
+          echo "--- Try standalone docker-compose ---"
+          which docker-compose || echo "docker-compose not found in PATH"
+          docker-compose --version || echo "docker-compose not installed or not accessible"
+
+
+
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        push: true
+        tags: ${{ secrets.DOCKERHUB_USERNAME }}/villa-agency-ci-cd-graph:latest
+
+    - name: Clean remote folder
+      uses: appleboy/ssh-action@v1
+      with:
+        host: ${{ secrets.SERVER_IP }}
+        username: ${{ secrets.SERVER_SSH_USER }}
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        script: |
+          rm -rf /home/${{ secrets.SERVER_SSH_USER }}/villa-agency-ci-cd-graph
+          mkdir -p /home/${{ secrets.SERVER_SSH_USER }}/villa-agency-ci-cd-graph
+
+    - name: Upload configs
+      uses: appleboy/scp-action@v0.1.4
+      with:
+        host: ${{ secrets.SERVER_IP }}
+        username: ${{ secrets.SERVER_SSH_USER }}
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        source: "prometheus/,blackbox/,docker-compose.yml"
+        target: "/home/${{ secrets.SERVER_SSH_USER }}/villa-agency-ci-cd-graph/"
+        overwrite: true
+
+
+
+
+    - name: SSH Deploy to AWS EC2
+      uses: appleboy/ssh-action@v1
+      with:
+        host: ${{ secrets.SERVER_IP }}
+        username: ${{ secrets.SERVER_SSH_USER }}
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        script: |
+          cd /home/${{ secrets.SERVER_SSH_USER }}/villa-agency-ci-cd-graph
+          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/villa-agency-ci-cd-graph:latest
+          /usr/local/bin/docker-compose down || true
+          /usr/local/bin/docker-compose up -d --build
